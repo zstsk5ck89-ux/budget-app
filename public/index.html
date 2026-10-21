@@ -946,7 +946,7 @@ th.amount { text-align: right; }
             </div>
             <div class="fiscal-row">
               <span>Prélèvement TVA</span>
-              <span class="badge badge-blue">J15 du M+1</span>
+              <span class="badge badge-blue">J16 du M+1</span>
             </div>
             <div class="fiscal-row">
               <span>CA mensuel normal</span>
@@ -1218,7 +1218,7 @@ th.amount { text-align: right; }
 <div class="modal-overlay" id="modalDecl" hidden>
   <div class="modal">
     <div class="modal-header">
-      <h3>Nouvelle déclaration</h3>
+      <h3 id="modalDeclTitle">Nouvelle déclaration</h3>
       <button class="btn btn-ghost btn-sm" id="modalDeclClose">✕</button>
     </div>
     <div class="modal-body">
@@ -1739,14 +1739,41 @@ function fiscalPaidLabel(kind, date) {
   return `<label class="cycle-paid"><input type="checkbox" ${isFiscalPaye(kind, date) ? 'checked' : ''} onchange="toggleFiscalPaid('${kind}','${monthKeyOf(date)}',this.checked)"> Payée</label>`;
 }
 
-// Prélèvements fiscaux (TVA, URSSAF) issus de la dernière déclaration, sur le compte 63
-function getFiscalDebits() {
+// TVA estimée d'un mois (clé AAAA-MM) : TVA des clients cochés « reçus » dans Revenus clients
+function tvaEstimeePourPeriode(key) {
+  const coches = revData[key] || {};
+  return clients.reduce((t, c) => coches[c.id] ? t + (Number(c.ht) || 0) * (Number(c.tva) || 0) / 100 : t, 0);
+}
+
+// TVA prélevée le 16 du mois suivant : montant déclaré si la déclaration existe, sinon estimé d'après les revenus cochés
+function getTvaDebits() {
+  const now = new Date();
   const out = [];
+  [-1, 0].forEach(k => {
+    const base = new Date(now.getFullYear(), now.getMonth() + k, 1);
+    const key = monthKeyOf(base);
+    const decl = declarations.find(d => d.periode === key);
+    out.push({
+      nom: decl ? 'TVA' : 'TVA (estimée)',
+      kind: 'tva',
+      date: new Date(base.getFullYear(), base.getMonth() + 1, 16),
+      montant: decl ? Number(decl.tva_collectee ?? decl.tva) || 0 : tvaEstimeePourPeriode(key),
+      compte: 'bb-63',
+      source: decl ? 'declaree' : 'estimee',
+      periode: key,
+    });
+  });
+  return out;
+}
+
+// Prélèvements fiscaux (TVA, URSSAF) sur le compte 63
+function getFiscalDebits() {
+  const out = getTvaDebits();
   const d = declarations.length > 0 ? declarations[0] : null;
-  if (!d || !d.periode) return out;
-  const [y, m] = d.periode.split('-').map(Number);
-  out.push({ nom: 'TVA', kind: 'tva', date: new Date(y, m, 24), montant: d.tva || 0, compte: 'bb-63' });
-  out.push({ nom: 'URSSAF', kind: 'urssaf', date: new Date(y, m + 1, 3), montant: d.urssaf || 0, compte: 'bb-63' });
+  if (d && d.periode) {
+    const [y, m] = d.periode.split('-').map(Number);
+    out.push({ nom: 'URSSAF', kind: 'urssaf', date: new Date(y, m + 1, 3), montant: d.urssaf || 0, compte: 'bb-63' });
+  }
   return out;
 }
 
@@ -1894,6 +1921,7 @@ function renderCycle() {
 // ============================================================
 function renderProchainsPrelevements() {
   const today = new Date();
+  const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const todayDay = today.getDate();
   const todayMonth = today.getMonth();
   const todayYear = today.getFullYear();
@@ -1923,11 +1951,12 @@ function renderProchainsPrelevements() {
     const urssafD = new Date(y, m + 1, 3); // M+2 (mois JS = 0-indexed donc m+1 = M+2)
     urssafDate = urssafD;
     urssafMontant = lastDecl.urssaf || 0;
-    // TVA : prélevé le 24 du M+1
-    const tvaD = new Date(y, m, 24); // M+1
-    tvaDate = tvaD;
-    tvaMontant = lastDecl.tva || 0;
   }
+
+  // TVA : prochaine échéance (le 16 du mois suivant), montant déclaré ou estimé d'après les revenus cochés
+  const tvaNext = getTvaDebits().find(t => t.date >= todayMidnight) || null;
+  let tvaSource = null, tvaPeriode = null;
+  if (tvaNext) { tvaDate = tvaNext.date; tvaMontant = tvaNext.montant; tvaSource = tvaNext.source; tvaPeriode = tvaNext.periode; }
 
   // URSSAF et TVA sont prélevées sur l'épargne dédiée (compte **63)
   const compteFiscal = comptes.find(c => c.id === 'bb-63');
@@ -1938,13 +1967,16 @@ function renderProchainsPrelevements() {
   const apresFiscal = {};
   let soldeCourant = soldeFiscal;
   [
-    tvaDate && !isFiscalPaye('tva', tvaDate) ? { k: 'tva', d: tvaDate, m: tvaMontant || 0 } : null,
-    urssafDate && !isFiscalPaye('urssaf', urssafDate) ? { k: 'urssaf', d: urssafDate, m: urssafMontant || 0 } : null,
+    tvaDate && tvaDate >= todayMidnight && !isFiscalPaye('tva', tvaDate) ? { k: 'tva', d: tvaDate, m: tvaMontant || 0 } : null,
+    urssafDate && urssafDate >= todayMidnight && !isFiscalPaye('urssaf', urssafDate) ? { k: 'urssaf', d: urssafDate, m: urssafMontant || 0 } : null,
   ].filter(Boolean).sort((a, b) => a.d - b.d).forEach(e => {
     soldeCourant -= e.m;
     apresFiscal[e.k] = soldeCourant;
   });
   const couleurSolde = v => v >= 0 ? 'var(--green)' : 'var(--red)';
+  const statutFiscal = (kind, date) => isFiscalPaye(kind, date)
+    ? 'Payée, déjà déduite du solde'
+    : (date < todayMidnight ? 'Prélevée, déjà déduite du solde' : null);
 
   const el = document.getElementById('prochains-body');
 
@@ -1975,10 +2007,10 @@ function renderProchainsPrelevements() {
         <div>
           <div style="font-weight:600;font-size:14px">URSSAF <span style="font-weight:400;color:var(--fg2)">prélevé le ${fmtDateShort(urssafDate)}</span></div>
           <div style="font-size:12px;color:var(--fg2)">Épargne **63 · solde actuel <strong style="color:var(--fg)">${fmtEur(soldeFiscal)}</strong>${urssafDiff !== null && urssafDiff >= 0 ? ` · dans ${urssafDiff} j` : ''}</div>
-          ${isFiscalPaye('urssaf', urssafDate)
-            ? `<div style="font-size:12px;color:var(--green);font-weight:600">Payée, déjà déduite du solde</div>`
+          ${statutFiscal('urssaf', urssafDate)
+            ? `<div style="font-size:12px;color:var(--green);font-weight:600">${statutFiscal('urssaf', urssafDate)}</div>`
             : `<div style="font-size:12px;color:var(--fg2)">Solde prévisionnel après URSSAF <strong style="color:${couleurSolde(apresFiscal.urssaf)}">${fmtEur(apresFiscal.urssaf)}</strong></div>`}
-          ${fiscalPaidLabel('urssaf', urssafDate)}
+          ${urssafDate >= todayMidnight ? fiscalPaidLabel('urssaf', urssafDate) : ''}
         </div>
       </div>
       <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;flex-shrink:0;color:var(--provision)">${fmtEur(urssafMontant)}</div>
@@ -1990,12 +2022,13 @@ function renderProchainsPrelevements() {
       <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
         <span style="font-size:20px;flex-shrink:0">🧾</span>
         <div>
-          <div style="font-weight:600;font-size:14px">TVA <span style="font-weight:400;color:var(--fg2)">prélevée le ${fmtDateShort(tvaDate)}</span></div>
+          <div style="font-weight:600;font-size:14px">TVA <span style="font-weight:400;color:var(--fg2)">${tvaSource === 'estimee' ? 'estimée, prélevée' : 'prélevée'} le ${fmtDateShort(tvaDate)}</span></div>
           <div style="font-size:12px;color:var(--fg2)">Épargne **63 · solde actuel <strong style="color:var(--fg)">${fmtEur(soldeFiscal)}</strong>${tvaDiff !== null && tvaDiff >= 0 ? ` · dans ${tvaDiff} j` : ''}</div>
-          ${isFiscalPaye('tva', tvaDate)
-            ? `<div style="font-size:12px;color:var(--green);font-weight:600">Payée, déjà déduite du solde</div>`
+          <div style="font-size:12px;color:var(--fg3)">${tvaSource === 'estimee' ? `Estimation d'après les revenus de ${fmtMonthLabel(tvaPeriode)} cochés, mise à jour à chaque virement coché` : `Déclarée pour ${fmtMonthLabel(tvaPeriode)}`}</div>
+          ${statutFiscal('tva', tvaDate)
+            ? `<div style="font-size:12px;color:var(--green);font-weight:600">${statutFiscal('tva', tvaDate)}</div>`
             : `<div style="font-size:12px;color:var(--fg2)">Solde prévisionnel après TVA <strong style="color:${couleurSolde(apresFiscal.tva)}">${fmtEur(apresFiscal.tva)}</strong></div>`}
-          ${fiscalPaidLabel('tva', tvaDate)}
+          ${tvaDate >= todayMidnight ? fiscalPaidLabel('tva', tvaDate) : ''}
         </div>
       </div>
       <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;flex-shrink:0;color:var(--provision)">${fmtEur(tvaMontant)}</div>
@@ -2132,7 +2165,7 @@ function initCalcFiscal() {
       <div class="compte-tile" style="border-color:var(--orange)">
         <span class="label">TVA à provisionner</span>
         <span class="solde" style="color:var(--orange)">${fmtEur(tva)}</span>
-        <span class="text-xs">À prélever J15 M+1</span>
+        <span class="text-xs">À prélever J16 M+1</span>
       </div>
       <div class="compte-tile" style="border-color:var(--green)">
         <span class="label">Net après charges</span>
@@ -2155,6 +2188,7 @@ function renderDeclarations() {
   tbody.innerHTML = declarations.map(d => {
     const statusLabel = { en_attente: 'En attente', declare: 'Déclaré', preleve: 'Prélevé' }[d.statut] || d.statut;
     const statusBadge = { en_attente: 'badge-yellow', declare: 'badge-blue', preleve: 'badge-green' }[d.statut] || 'badge-yellow';
+    const [py, pm] = d.periode.split('-').map(Number);
     return `<tr>
       <td><strong>${d.periode}</strong></td>
       <td class="amount mono">${fmtEur(d.ca_ht)}</td>
@@ -2163,14 +2197,35 @@ function renderDeclarations() {
       <td><span class="badge ${statusBadge}">${statusLabel}</span></td>
       <td class="text-xs" style="color:var(--fg3)">
         ${d.urssaf_preleve_le ? 'URSSAF: J3 ' + d.urssaf_preleve_le : ''}
-        ${d.tva_prelevee_le ? '<br>TVA: J15 ' + d.tva_prelevee_le : ''}
+        <br>TVA: J16 ${fmtDate(new Date(py, pm, 16))}
+        <br><button type="button" class="btn btn-ghost btn-sm" style="margin-top:4px" onclick="editDeclaration('${d.periode}')">Modifier</button>
       </td>
     </tr>`;
   }).join('');
 }
 
 // Modal déclaration
+let editingDecl = null;
+
+function editDeclaration(periode) {
+  const d = declarations.find(x => x.periode === periode);
+  if (!d) return;
+  editingDecl = d;
+  document.getElementById('modalDeclTitle').textContent = 'Modifier la déclaration';
+  document.getElementById('declPeriode').value = d.periode;
+  document.getElementById('declPeriode').disabled = true;
+  document.getElementById('declCA').value = d.ca_ht;
+  document.getElementById('declTVAcol').value = d.tva_collectee;
+  document.getElementById('declDate').value = d.declare_le ? String(d.declare_le).slice(0, 10) : '';
+  document.getElementById('declNotes').value = d.notes || '';
+  updateDeclCalc();
+  document.getElementById('modalDecl').hidden = false;
+}
+
 document.getElementById('addDeclBtn').addEventListener('click', () => {
+  editingDecl = null;
+  document.getElementById('modalDeclTitle').textContent = 'Nouvelle déclaration';
+  document.getElementById('declPeriode').disabled = false;
   const now = new Date();
   document.getElementById('declPeriode').value = now.toISOString().slice(0,7);
   document.getElementById('declCA').value = 4583;
@@ -2189,7 +2244,7 @@ function updateDeclCalc() {
   let urssafDate = '', tvaDate = '';
   if (periode) {
     const [y,m] = periode.split('-').map(Number);
-    const tvaM = new Date(y, m, 15);
+    const tvaM = new Date(y, m, 16);
     const urssafM = new Date(y, m+1, 3);
     tvaDate = fmtDate(tvaM);
     urssafDate = fmtDate(urssafM);
@@ -2206,20 +2261,20 @@ document.getElementById('declCA').addEventListener('input', updateDeclCalc);
 document.getElementById('declTVAcol').addEventListener('input', updateDeclCalc);
 document.getElementById('declPeriode').addEventListener('input', updateDeclCalc);
 
-document.getElementById('modalDeclClose').addEventListener('click', () => { document.getElementById('modalDecl').hidden = true; });
-document.getElementById('modalDeclCancel').addEventListener('click', () => { document.getElementById('modalDecl').hidden = true; });
+document.getElementById('modalDeclClose').addEventListener('click', () => { document.getElementById('modalDecl').hidden = true; editingDecl = null; });
+document.getElementById('modalDeclCancel').addEventListener('click', () => { document.getElementById('modalDecl').hidden = true; editingDecl = null; });
 document.getElementById('modalDeclSave').addEventListener('click', async () => {
-  const periode = document.getElementById('declPeriode').value;
+  const periode = editingDecl ? editingDecl.periode : document.getElementById('declPeriode').value;
   const ca = parseFloat(document.getElementById('declCA').value) || 0;
   const tva = parseFloat(document.getElementById('declTVAcol').value) || 0;
   const urssaf = Math.round(ca * TAUX_URSSAF);
   const notes = document.getElementById('declNotes').value;
   const dateDecl = document.getElementById('declDate').value;
   const [y,m] = periode.split('-').map(Number);
-  const tvaDate = fmtDate(new Date(y, m, 15));
+  const tvaDate = fmtDate(new Date(y, m, 16));
   const urssafDate = fmtDate(new Date(y, m+1, 3));
 
-  const decl = { periode, ca_ht: ca, tva_collectee: tva, urssaf, declare_le: dateDecl, urssaf_preleve_le: urssafDate, tva_prelevee_le: tvaDate, statut: 'declare', notes };
+  const decl = { periode, ca_ht: ca, tva_collectee: tva, urssaf, declare_le: dateDecl, urssaf_preleve_le: urssafDate, tva_prelevee_le: tvaDate, statut: editingDecl ? editingDecl.statut : 'declare', notes };
   if (sb) {
     try {
       const { error } = await sb.from('declarations').upsert({id: periode, ...decl});
@@ -2230,11 +2285,14 @@ document.getElementById('modalDeclSave').addEventListener('click', async () => {
       renderDeclarations();
     } catch(e) { console.error('declarations save', e); showToast('Erreur : ' + e.message); return; }
   } else {
+    declarations = declarations.filter(x => x.periode !== periode);
     declarations.unshift({ id: periode, ...decl });
+    declarations.sort((a, b) => String(b.periode).localeCompare(String(a.periode)));
     saveLocal();
     renderDeclarations();
   }
   document.getElementById('modalDecl').hidden = true;
+  editingDecl = null;
   showToast('Déclaration enregistrée ✓');
 });
 
@@ -2471,6 +2529,8 @@ function renderRevenus() {
       if (sb) { try { await sb.from('revenus_coches').upsert({mois: revMonth, coches: revData[revMonth]}); } catch(e) {} }
       saveLocal();
       renderRevenus();
+      renderProchainsPrelevements();
+      renderCycle();
     });
   });
 
