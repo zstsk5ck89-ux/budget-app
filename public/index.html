@@ -1852,6 +1852,44 @@ function initCycleControls() {
   sel.e.addEventListener('change', onChange);
 }
 
+// Prélèvements (hors URSSAF/TVA) d'une fenêtre : prélèvements fixes, Amex du 5 et échéanciers PayPal
+function getCyclePrelevements(start, end) {
+  const items = [];
+  prelevements.forEach(p => {
+    if (p.suspendu) return;
+    for (let k = 0; k <= 2; k++) {
+      const d = clampDate(start.getFullYear(), start.getMonth() + k, p.jour);
+      if (d >= start && d <= end) items.push({ nom: p.nom, date: d, montant: p.montant || 0, compte: p.compte });
+    }
+  });
+  for (let k = 0; k <= 2; k++) {
+    const base = new Date(start.getFullYear(), start.getMonth() + k, 1);
+    let t = amexTotalFor(monthKeyOf(base));
+    let estime = false, moisPrec = '';
+    if (t === 0) {
+      const prec = new Date(base.getFullYear(), base.getMonth() - 1, 1);
+      t = amexTotalFor(monthKeyOf(prec)); estime = t > 0;
+      moisPrec = prec.toLocaleDateString('fr-FR', { month: 'long' });
+    }
+    const d = clampDate(base.getFullYear(), base.getMonth(), 5);
+    if (d >= start && d <= end) items.push({ nom: '💳 Amex', date: d, montant: t, compte: 'sg-1013', note: t === 0 ? 'aucune dépense Amex saisie' : (estime ? 'dépenses Amex saisies en ' + moisPrec : '') });
+  }
+  getEcheancesDebits(start, end).forEach(x => items.push(x));
+  return items;
+}
+
+// Bornes du cycle en cours (du jour s au jour e du mois suivant)
+function getCycleBounds() {
+  const { s, e } = getCycleConfig();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let start;
+  if (today.getDate() >= s) start = clampDate(today.getFullYear(), today.getMonth(), s);
+  else if (today.getDate() <= e) start = clampDate(today.getFullYear(), today.getMonth() - 1, s);
+  else start = clampDate(today.getFullYear(), today.getMonth(), s);
+  return { start, end: clampDate(start.getFullYear(), start.getMonth() + 1, e), today };
+}
+
 function renderCycle() {
   const body = document.getElementById('cycle-body');
   if (!body) return;
@@ -1874,28 +1912,8 @@ function renderCycle() {
   document.getElementById('cycle-title').textContent = `Prélèvements et entrées du ${fmtD(start)} au ${fmtD(end)}${prochain ? ' (prochain cycle)' : ''}`;
 
   // Liste des prélèvements dans la fenêtre
-  const items = [];
-  prelevements.forEach(p => {
-    if (p.suspendu) return;
-    for (let k = 0; k <= 2; k++) {
-      const d = clamp(start.getFullYear(), start.getMonth() + k, p.jour);
-      if (d >= start && d <= end) items.push({ nom: p.nom, date: d, montant: p.montant || 0, compte: p.compte });
-    }
-  });
+  const items = getCyclePrelevements(start, end);
   getFiscalDebits().forEach(f => { if (f.date >= start && f.date <= end) items.push({ ...f, paye: isFiscalPaye(f.kind, f.date) }); });
-  for (let k = 0; k <= 2; k++) {
-    const base = new Date(start.getFullYear(), start.getMonth() + k, 1);
-    let t = amexTotalFor(monthKeyOf(base));
-    let estime = false, moisPrec = '';
-    if (t === 0) {
-      const prec = new Date(base.getFullYear(), base.getMonth() - 1, 1);
-      t = amexTotalFor(monthKeyOf(prec)); estime = t > 0;
-      moisPrec = prec.toLocaleDateString('fr-FR', { month: 'long' });
-    }
-    const d = clamp(base.getFullYear(), base.getMonth(), 5);
-    if (d >= start && d <= end) items.push({ nom: '💳 Amex', date: d, montant: t, compte: 'sg-1013', note: t === 0 ? 'aucune dépense Amex saisie' : (estime ? 'dépenses Amex saisies en ' + moisPrec : '') });
-  }
-  getEcheancesDebits(start, end).forEach(x => items.push(x));
   items.sort((a, b) => a.date - b.date || a.nom.localeCompare(b.nom));
 
   if (items.length === 0) {
@@ -1998,14 +2016,10 @@ function renderProchainsPrelevements() {
   const todayYear = today.getFullYear();
   const lastDayOfMonth = new Date(todayYear, todayMonth + 1, 0).getDate();
 
-  // --- Prélèvements restants ce mois ---
-  const restants = prelevements.filter(p => {
-    if (p.suspendu) return false;
-    return p.jour >= todayDay;
-  });
-  const amexMois = amexTotalFor(monthKeyOf(today));
-  if (amexMois > 0 && todayDay <= 5) restants.push({ nom: '💳 Amex', montant: amexMois, jour: 5 });
-  getEcheancesDebits(todayMidnight, new Date(todayYear, todayMonth, lastDayOfMonth)).forEach(x => restants.push({ nom: x.nom, montant: x.montant, jour: x.date.getDate() }));
+  // --- Prélèvements restants d'ici la fin du cycle (même fenêtre que la liste du bas) ---
+  const cycleFin = getCycleBounds().end;
+  const restants = getCyclePrelevements(todayMidnight, cycleFin).sort((a, b) => a.date - b.date);
+  const fmtFin = cycleFin.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' });
   const totalRestant = restants.reduce((s, p) => s + (p.montant || 0), 0);
 
   // --- URSSAF & TVA : prochaine échéance depuis les déclarations ---
@@ -2064,7 +2078,7 @@ function renderProchainsPrelevements() {
       <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
         <span style="font-size:20px;flex-shrink:0">📋</span>
         <div>
-          <div style="font-weight:600;font-size:14px">${restants.length} prélèvement${restants.length > 1 ? 's' : ''} restant${restants.length > 1 ? 's' : ''} ce mois</div>
+          <div style="font-weight:600;font-size:14px">${restants.length} prélèvement${restants.length > 1 ? 's' : ''} restant${restants.length > 1 ? 's' : ''} d'ici le ${fmtFin}</div>
           <div style="font-size:12px;color:var(--fg2)">${restants.map(p => escHtml(p.nom)).join(' · ')}</div>
         </div>
       </div>
