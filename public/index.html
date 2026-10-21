@@ -1148,12 +1148,12 @@ th.amount { text-align: right; }
           <div class="card-body">
             <div class="form-grid">
               <div class="form-row">
-                <label class="form-label">CA HT prévu (€)</label>
-                <input class="form-input mono" id="simCA" type="number" value="4583">
+                <label class="form-label">CA HT du mois (€), vide = automatique</label>
+                <input class="form-input mono" id="simCA" type="number" placeholder="automatique">
               </div>
               <div class="form-row">
-                <label class="form-label">TVA prévue (€)</label>
-                <input class="form-input mono" id="simTVAinput" type="number" value="546">
+                <label class="form-label">TVA du mois (€), vide = automatique</label>
+                <input class="form-input mono" id="simTVAinput" type="number" placeholder="automatique">
               </div>
               <div class="form-row">
                 <label class="form-label">Bonus / revenu exceptionnel (€)</label>
@@ -1163,19 +1163,23 @@ th.amount { text-align: right; }
                 <label class="form-label">Dépense exceptionnelle (€)</label>
                 <input class="form-input mono" id="simDepense" type="number" value="0">
               </div>
+              <div class="form-row">
+                <label class="form-label">Variable : plaisir et imprévus (€)</label>
+                <input class="form-input mono" id="simVariable" type="number" value="550">
+              </div>
             </div>
             <div style="margin-top:14px">
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--fg2)">
                 <input type="checkbox" id="simCountryClub" style="accent-color:var(--accent)">
-                Country Club suspendu ce mois (économie 120 €)
+                Country Club suspendu ce mois
               </label>
             </div>
-            <button class="btn btn-primary" style="margin-top:14px" id="simCalcBtn">Calculer la projection</button>
+            <p class="text-xs" style="margin-top:12px;color:var(--fg3)">La projection se calcule seule à partir de tes clients, de leurs virements cochés, de tes prélèvements et de tes déclarations.</p>
           </div>
         </div>
 
         <!-- Résultats -->
-        <div id="simResults" hidden>
+        <div id="simResults">
           <div class="grid-2" id="simResultsGrid"></div>
         </div>
 
@@ -1566,6 +1570,7 @@ function renderAll() {
   renderSoldesForm();
   renderProchainsPrelevements();
   renderCycle();
+  runSimulation();
   computeAlerts();
   renderComptes();
   renderDeclarations();
@@ -1709,6 +1714,21 @@ function getCycleConfig() {
   return { s: 20, e: 14 };
 }
 
+function clampDate(y, m, day) {
+  return new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));
+}
+
+// Date de virement d'un client : Xylem paie le vendredi de la semaine (lundi au dimanche) du 11 du mois ;
+// pour les autres, le jour indiqué sur la fiche client.
+function datePaiementClient(c, y, m) {
+  if (/^xylem/i.test(c.nom || '')) {
+    const d11 = new Date(y, m, 11);
+    const joursDepuisLundi = (d11.getDay() + 6) % 7;
+    return new Date(y, m, 11 + (4 - joursDepuisLundi));
+  }
+  return clampDate(y, m, c.jour);
+}
+
 function monthKeyOf(d) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 }
@@ -1800,7 +1820,7 @@ function renderCycle() {
 
   // Cycle en cours : du jour s au jour e du mois suivant.
   // Entre la fin (e) et le début (s) du cycle suivant, on affiche le prochain cycle.
-  const clamp = (y, m, day) => new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));
+  const clamp = clampDate;
   let start;
   if (today.getDate() >= s) start = clamp(today.getFullYear(), today.getMonth(), s);
   else if (today.getDate() <= e) start = clamp(today.getFullYear(), today.getMonth() - 1, s);
@@ -1849,16 +1869,7 @@ function renderCycle() {
 
   // Entrées attendues : clients pas encore cochés dans « Revenus clients » (virements sur le compte Pro)
   const COMPTE_ENTREES = 'bb-68';
-  // Date de virement d'un client : Xylem paie le vendredi de la semaine (lundi au dimanche) du 11 du mois ;
-  // pour les autres, le jour indiqué sur la fiche client.
-  const datePaiement = (c, y, m) => {
-    if (/^xylem/i.test(c.nom || '')) {
-      const d11 = new Date(y, m, 11);
-      const joursDepuisLundi = (d11.getDay() + 6) % 7;
-      return new Date(y, m, 11 + (4 - joursDepuisLundi));
-    }
-    return clamp(y, m, c.jour);
-  };
+  const datePaiement = datePaiementClient;
   const entrees = [];
   clients.forEach(c => {
     for (let k = 0; k <= 2; k++) {
@@ -2531,6 +2542,7 @@ function renderRevenus() {
       renderRevenus();
       renderProchainsPrelevements();
       renderCycle();
+      runSimulation();
     });
   });
 
@@ -2835,78 +2847,123 @@ function getCurrentCheckItems() {
 // SIMULATION
 // ============================================================
 function initSimulation() {
-  document.getElementById('simPrev').addEventListener('click', () => { simMonth = addMonths(simMonth, -1); document.getElementById('simMonth').textContent = fmtMonthLabel(simMonth); document.getElementById('simResults').hidden = true; });
-  document.getElementById('simNext').addEventListener('click', () => { simMonth = addMonths(simMonth, 1); document.getElementById('simMonth').textContent = fmtMonthLabel(simMonth); document.getElementById('simResults').hidden = true; });
+  const maj = () => { document.getElementById('simMonth').textContent = fmtMonthLabel(simMonth); runSimulation(); };
+  document.getElementById('simPrev').addEventListener('click', () => { simMonth = addMonths(simMonth, -1); maj(); });
+  document.getElementById('simNext').addEventListener('click', () => { simMonth = addMonths(simMonth, 1); maj(); });
+  ['simCA', 'simTVAinput', 'simBonus', 'simDepense', 'simVariable'].forEach(id => document.getElementById(id).addEventListener('input', runSimulation));
+  document.getElementById('simCountryClub').addEventListener('change', runSimulation);
   document.getElementById('simMonth').textContent = fmtMonthLabel(simMonth);
-  document.getElementById('simCalcBtn').addEventListener('click', runSimulation);
 }
 
 function runSimulation() {
-  const ca = parseFloat(document.getElementById('simCA').value) || 4583;
-  const tva = parseFloat(document.getElementById('simTVAinput').value) || 546;
-  const bonus = parseFloat(document.getElementById('simBonus').value) || 0;
-  const depense = parseFloat(document.getElementById('simDepense').value) || 0;
-  const ccSuspendu = document.getElementById('simCountryClub').checked;
-
-  const urssaf = Math.round(ca * TAUX_URSSAF);
-  const revenuXylem = 2400; // TTC
-  const revenuSalvaCGFF = 2728.75; // TTC
-
-  // Prélèvements fixes perso
-  const chargesFixesPerso = prelevements
-    .filter(p => p.groupe === 'perso' && !p.suspendu)
-    .filter(p => !(ccSuspendu && p.id === 'p-cc'))
-    .reduce((s,p) => s + p.montant, 0);
-
-  const chargesFixesPro = prelevements
-    .filter(p => p.groupe === 'pro' && !p.suspendu)
-    .reduce((s,p) => s + p.montant, 0);
-
-  const ccEco = ccSuspendu ? 120 : 0;
-  const netEstime = ca - urssaf; // après URSSAF
-  const virementEstime = netEstime - tva - chargesFixesPro - depense + bonus;
-
   const grid = document.getElementById('simResultsGrid');
+  if (!grid) return;
+  const [y, m1] = simMonth.split('-').map(Number);
+  const m = m1 - 1;
+  const num = id => parseFloat(document.getElementById(id).value);
+  const bonus = num('simBonus') || 0;
+  const depense = num('simDepense') || 0;
+  const variable = isNaN(num('simVariable')) ? 550 : num('simVariable');
+  const ccSuspendu = document.getElementById('simCountryClub').checked;
+  const fmtD = d => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }).replace('.', '');
+
+  // --- Entrées : un virement par client, avec sa date et son statut (coché = reçu) ---
+  const coches = revData[simMonth] || {};
+  const entrees = clients.map(c => {
+    const ht = Number(c.ht) || 0;
+    const tva = ht * (Number(c.tva) || 0) / 100;
+    return { nom: c.nom, date: datePaiementClient(c, y, m), ht, tva, ttc: ht + tva, recu: !!coches[c.id] };
+  }).sort((a, b) => a.date - b.date);
+  const caClients = entrees.reduce((t, e) => t + e.ht, 0);
+  const tvaClients = entrees.reduce((t, e) => t + e.tva, 0);
+
+  // --- CA HT, TVA, URSSAF : saisis, sinon déclarés pour ce mois, sinon d'après les clients ---
+  const decl = declarations.find(d => d.periode === simMonth);
+  const caSaisi = num('simCA'), tvaSaisie = num('simTVAinput');
+  const ca = !isNaN(caSaisi) ? caSaisi : decl ? Number(decl.ca_ht) || 0 : caClients;
+  const tva = !isNaN(tvaSaisie) ? tvaSaisie : decl ? Number(decl.tva_collectee ?? decl.tva) || 0 : tvaClients;
+  const source = (!isNaN(caSaisi) || !isNaN(tvaSaisie)) ? 'saisi' : decl ? 'déclaré' : "d'après tes clients";
+  const urssaf = Math.round(ca * TAUX_URSSAF);
+  const totalTTC = ca + tva + bonus;
+
+  // --- Charges du mois ---
+  const prelevActifs = prelevements.filter(p => !p.suspendu && !(ccSuspendu && p.id === 'p-cc'));
+  const chargesPerso = prelevActifs.filter(p => p.groupe === 'perso').reduce((t, p) => t + (Number(p.montant) || 0), 0);
+  const chargesPro = prelevActifs.filter(p => p.groupe === 'pro').reduce((t, p) => t + (Number(p.montant) || 0), 0);
+  const amex = amexTotalFor(simMonth);
+  let paypal = 0;
+  echeanciers.forEach(e => {
+    if (!e.actif) return;
+    const d1 = new Date(e.date_premiere_echeance);
+    for (let i = 0; i < e.nb_echeances; i++) {
+      const d = new Date(d1); d.setMonth(d1.getMonth() + i);
+      if (d.getFullYear() === y && d.getMonth() === m) paypal += Math.round(e.montant_total / e.nb_echeances * 100) / 100;
+    }
+  });
+  const totalCharges = chargesPerso + chargesPro + amex + paypal + variable + depense;
+
+  const netApresProvisions = totalTTC - tva - urssaf;
+  const disponible = netApresProvisions - totalCharges;
+
+  // --- Info : prélevé ce mois sur le compte 63 (revenus des mois précédents, déjà provisionnés) ---
+  const prevM = new Date(y, m - 1, 1), prev2M = new Date(y, m - 2, 1);
+  const declPrev = declarations.find(d => d.periode === monthKeyOf(prevM));
+  const tvaPrelevee = declPrev ? Number(declPrev.tva_collectee ?? declPrev.tva) || 0 : tvaEstimeePourPeriode(monthKeyOf(prevM));
+  const declPrev2 = declarations.find(d => d.periode === monthKeyOf(prev2M));
+  const urssafPrelevee = declPrev2 ? Number(declPrev2.urssaf) || 0 : 0;
+
+  const ligne = (label, montant, cls) => `<div class="sim-line"><span class="sim-desc">${label}</span><span class="sim-amount ${cls}">${montant}</span></div>`;
+  const ligneTotal = (label, montant, cls) => `<div class="sim-line total"><span class="sim-desc">${label}</span><span class="sim-amount ${cls}">${montant}</span></div>`;
+
+  const recuTotal = entrees.filter(e => e.recu).reduce((t, e) => t + e.ttc, 0);
+  const attenduTotal = entrees.filter(e => !e.recu).reduce((t, e) => t + e.ttc, 0);
+
   grid.innerHTML = `
     <div class="card">
-      <div class="card-header"><h3>Revenus du mois</h3></div>
+      <div class="card-header"><h3>Entrées du mois</h3></div>
       <div class="sim-flux card-body">
-        <div class="sim-line"><span class="sim-desc">Xylem (TTC ~J14)</span><span class="sim-amount plus">+${fmtEur(revenuXylem)}</span></div>
-        <div class="sim-line"><span class="sim-desc">Salva + CGFF (TTC ~J20-27)</span><span class="sim-amount plus">+${fmtEur(revenuSalvaCGFF)}</span></div>
-        ${bonus > 0 ? `<div class="sim-line"><span class="sim-desc">Bonus exceptionnel</span><span class="sim-amount plus">+${fmtEur(bonus)}</span></div>` : ''}
-        <div class="sim-line total"><span class="sim-desc">Total TTC encaissé</span><span class="sim-amount plus">${fmtEur(revenuXylem + revenuSalvaCGFF + bonus)}</span></div>
+        ${entrees.length === 0 ? '<div class="sim-desc">Aucun client enregistré.</div>' : entrees.map(e =>
+          `<div class="sim-line"><span class="sim-desc">${escHtml(e.nom)} <small style="color:var(--fg3)">${fmtD(e.date)}</small> <span class="badge ${e.recu ? 'badge-green' : 'badge-yellow'}">${e.recu ? 'reçu' : 'attendu'}</span></span><span class="sim-amount plus">+${fmtEur(e.ttc)}</span></div>`).join('')}
+        ${bonus > 0 ? ligne('Bonus exceptionnel', '+' + fmtEur(bonus), 'plus') : ''}
+        ${ligne('Déjà reçu (TTC)', fmtEur(recuTotal), 'neutral')}
+        ${ligne('Encore attendu (TTC)', fmtEur(attenduTotal), 'neutral')}
+        ${ligneTotal('Total encaissé TTC', fmtEur(totalTTC), 'plus')}
       </div>
     </div>
 
     <div class="card">
-      <div class="card-header"><h3>Provisions à mettre de côté</h3></div>
+      <div class="card-header"><h3>À mettre de côté (compte 63)</h3></div>
       <div class="sim-flux card-body">
-        <div class="sim-line"><span class="sim-desc">URSSAF (25,60% × ${fmtEur(ca)} HT)</span><span class="sim-amount minus">${fmtEur(urssaf)}</span></div>
-        <div class="sim-line"><span class="sim-desc">TVA collectée</span><span class="sim-amount minus">${fmtEur(tva)}</span></div>
-        <div class="sim-line total"><span class="sim-desc">Total à provisionner → 63</span><span class="sim-amount minus">${fmtEur(urssaf + tva)}</span></div>
+        ${ligne(`CA HT <small style="color:var(--fg3)">(${source})</small>`, fmtEur(ca), 'neutral')}
+        ${ligne(`URSSAF (25,60 % du CA HT), prélevée le 3 ${fmtMonthLabel(monthKeyOf(new Date(y, m + 2, 1))).split(' ')[0]}`, fmtEur(urssaf), 'minus')}
+        ${ligne(`TVA collectée, prélevée le 16 ${fmtMonthLabel(monthKeyOf(new Date(y, m + 1, 1))).split(' ')[0]}`, fmtEur(tva), 'minus')}
+        ${ligneTotal('Total à provisionner', fmtEur(urssaf + tva), 'minus')}
+        ${tvaPrelevee > 0 || urssafPrelevee > 0 ? `<div class="sim-desc" style="font-size:12px;color:var(--fg3);padding-top:8px">Prélevé ce mois sur le 63 (revenus des mois précédents, déjà provisionnés) : ${[tvaPrelevee > 0 ? 'TVA ' + fmtEur(tvaPrelevee) : '', urssafPrelevee > 0 ? 'URSSAF ' + fmtEur(urssafPrelevee) : ''].filter(Boolean).join(', ')}.</div>` : ''}
       </div>
     </div>
 
     <div class="card">
-      <div class="card-header"><h3>Charges mensuelles</h3></div>
+      <div class="card-header"><h3>Charges du mois</h3></div>
       <div class="sim-flux card-body">
-        <div class="sim-line"><span class="sim-desc">Charges fixes perso${ccSuspendu?' (CC suspendu)':''}</span><span class="sim-amount minus">${fmtEur(chargesFixesPerso)}</span></div>
-        <div class="sim-line"><span class="sim-desc">Charges fixes pro</span><span class="sim-amount minus">${fmtEur(chargesFixesPro)}</span></div>
-        <div class="sim-line"><span class="sim-desc">Variable (plaisir + imprévus)</span><span class="sim-amount minus">~550 €</span></div>
-        ${depense > 0 ? `<div class="sim-line"><span class="sim-desc">Dépense exceptionnelle</span><span class="sim-amount minus">${fmtEur(depense)}</span></div>` : ''}
-        ${ccEco > 0 ? `<div class="sim-line"><span class="sim-desc" style="color:var(--green)">Économie Country Club</span><span class="sim-amount plus">+${fmtEur(ccEco)}</span></div>` : ''}
-        <div class="sim-line total"><span class="sim-desc">Total charges</span><span class="sim-amount minus">${fmtEur(chargesFixesPerso + chargesFixesPro + 550 + depense - ccEco)}</span></div>
+        ${ligne('Prélèvements perso' + (ccSuspendu ? ' (Country Club suspendu)' : ''), fmtEur(chargesPerso), 'minus')}
+        ${ligne('Prélèvements pro', fmtEur(chargesPro), 'minus')}
+        ${amex > 0 ? ligne('💳 Amex (prélevée le 5)', fmtEur(amex), 'minus') : ''}
+        ${paypal > 0 ? ligne('Échéanciers PayPal', fmtEur(paypal), 'minus') : ''}
+        ${ligne('Variable (plaisir et imprévus)', fmtEur(variable), 'minus')}
+        ${depense > 0 ? ligne('Dépense exceptionnelle', fmtEur(depense), 'minus') : ''}
+        ${ligneTotal('Total charges', fmtEur(totalCharges), 'minus')}
       </div>
     </div>
 
     <div class="card">
-      <div class="card-header"><h3>Résumé net estimé</h3></div>
+      <div class="card-header"><h3>Résumé du mois</h3></div>
       <div class="sim-flux card-body">
-        <div class="sim-line"><span class="sim-desc">CA HT déclaré</span><span class="sim-amount neutral">${fmtEur(ca)}</span></div>
-        <div class="sim-line"><span class="sim-desc">Après URSSAF</span><span class="sim-amount neutral">${fmtEur(netEstime)}</span></div>
-        <div class="sim-line"><span class="sim-desc">Après TVA</span><span class="sim-amount neutral">${fmtEur(netEstime - tva)}</span></div>
-        <div class="sim-line"><span class="sim-desc">Après charges fixes</span><span class="sim-amount neutral">${fmtEur(netEstime - tva - chargesFixesPerso - chargesFixesPro)}</span></div>
-        <div class="sim-line total"><span class="sim-desc">Disponible pour LDD</span><span class="sim-amount ${virementEstime - 550 > 0 ? 'plus':'minus'}">${fmtEur(virementEstime - 550)}</span></div>
+        ${ligne('Total encaissé TTC', fmtEur(totalTTC), 'neutral')}
+        ${ligne('Moins la TVA à reverser', '−' + fmtEur(tva), 'neutral')}
+        ${ligne('Moins l\'URSSAF', '−' + fmtEur(urssaf), 'neutral')}
+        ${ligne('Net après provisions', fmtEur(netApresProvisions), 'neutral')}
+        ${ligne('Moins les charges du mois', '−' + fmtEur(totalCharges), 'neutral')}
+        ${ligneTotal('Disponible pour LDD', fmtEur(disponible), disponible >= 0 ? 'plus' : 'minus')}
       </div>
     </div>
   `;
