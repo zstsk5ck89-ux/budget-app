@@ -1675,8 +1675,22 @@ function renderProchainsPrelevements() {
     tvaMontant = lastDecl.tva || 0;
   }
 
-  const comptePro = comptes.find(c => c.id === 'bb-68');
-  const soldePro = comptePro ? Number(comptePro.solde) : 0;
+  // URSSAF et TVA sont prélevées sur l'épargne dédiée (compte **63)
+  const compteFiscal = comptes.find(c => c.id === 'bb-63');
+  const soldeFiscal = compteFiscal ? Number(compteFiscal.solde) || 0 : 0;
+
+  // Solde prévisionnel après chaque prélèvement, dans l'ordre des dates
+  // (la TVA part avant l'URSSAF : le solde après URSSAF en tient compte)
+  const apresFiscal = {};
+  let soldeCourant = soldeFiscal;
+  [
+    tvaDate ? { k: 'tva', d: tvaDate, m: tvaMontant || 0 } : null,
+    urssafDate ? { k: 'urssaf', d: urssafDate, m: urssafMontant || 0 } : null,
+  ].filter(Boolean).sort((a, b) => a.d - b.d).forEach(e => {
+    soldeCourant -= e.m;
+    apresFiscal[e.k] = soldeCourant;
+  });
+  const couleurSolde = v => v >= 0 ? 'var(--green)' : 'var(--red)';
 
   const el = document.getElementById('prochains-body');
 
@@ -1688,41 +1702,43 @@ function renderProchainsPrelevements() {
 
   // Ligne prélèvements restants
   const prelHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border)">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:20px">📋</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
+        <span style="font-size:20px;flex-shrink:0">📋</span>
         <div>
           <div style="font-weight:600;font-size:14px">${restants.length} prélèvement${restants.length > 1 ? 's' : ''} restant${restants.length > 1 ? 's' : ''} ce mois</div>
           <div style="font-size:12px;color:var(--fg2)">${restants.map(p => escHtml(p.nom)).join(' · ')}</div>
         </div>
       </div>
-      <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;color:var(--orange)">${fmtEur(totalRestant)}</div>
+      <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;flex-shrink:0;color:var(--orange)">${fmtEur(totalRestant)}</div>
     </div>`;
 
   // Ligne URSSAF
   const urssafHTML = urssafDate ? `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border)">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:20px">🏛</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
+        <span style="font-size:20px;flex-shrink:0">🏛</span>
         <div>
           <div style="font-weight:600;font-size:14px">URSSAF <span style="font-weight:400;color:var(--fg2)">prélevé le ${fmtDateShort(urssafDate)}</span></div>
-          <div style="font-size:12px;color:var(--fg2)">Courant **68 · solde actuel <strong style="color:${soldePro >= urssafMontant ? 'var(--green)' : 'var(--orange)'}">${fmtEur(soldePro)}</strong>${urssafDiff !== null && urssafDiff >= 0 ? ` · dans ${urssafDiff} j` : ''}</div>
+          <div style="font-size:12px;color:var(--fg2)">Épargne **63 · solde actuel <strong style="color:var(--fg)">${fmtEur(soldeFiscal)}</strong>${urssafDiff !== null && urssafDiff >= 0 ? ` · dans ${urssafDiff} j` : ''}</div>
+          <div style="font-size:12px;color:var(--fg2)">Solde prévisionnel après URSSAF <strong style="color:${couleurSolde(apresFiscal.urssaf)}">${fmtEur(apresFiscal.urssaf)}</strong></div>
         </div>
       </div>
-      <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;color:var(--provision)">${fmtEur(urssafMontant)}</div>
+      <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;flex-shrink:0;color:var(--provision)">${fmtEur(urssafMontant)}</div>
     </div>` : '';
 
   // Ligne TVA
   const tvaHTML = tvaDate ? `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 0">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:20px">🧾</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 0">
+      <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
+        <span style="font-size:20px;flex-shrink:0">🧾</span>
         <div>
           <div style="font-weight:600;font-size:14px">TVA <span style="font-weight:400;color:var(--fg2)">prélevée le ${fmtDateShort(tvaDate)}</span></div>
-          <div style="font-size:12px;color:var(--fg2)">Courant **68 · solde actuel <strong style="color:${soldePro >= tvaMontant ? 'var(--green)' : 'var(--orange)'}">${fmtEur(soldePro)}</strong>${tvaDiff !== null && tvaDiff >= 0 ? ` · dans ${tvaDiff} j` : ''}</div>
+          <div style="font-size:12px;color:var(--fg2)">Épargne **63 · solde actuel <strong style="color:var(--fg)">${fmtEur(soldeFiscal)}</strong>${tvaDiff !== null && tvaDiff >= 0 ? ` · dans ${tvaDiff} j` : ''}</div>
+          <div style="font-size:12px;color:var(--fg2)">Solde prévisionnel après TVA <strong style="color:${couleurSolde(apresFiscal.tva)}">${fmtEur(apresFiscal.tva)}</strong></div>
         </div>
       </div>
-      <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;color:var(--provision)">${fmtEur(tvaMontant)}</div>
+      <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;flex-shrink:0;color:var(--provision)">${fmtEur(tvaMontant)}</div>
     </div>` : '';
 
   const noFiscal = !urssafDate && !tvaDate
