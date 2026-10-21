@@ -1624,6 +1624,21 @@ function renderDashboardComptes() {
   });
 }
 
+// Échéanciers PayPal : une échéance par mois à partir de la date de début, pendant nb_echeances mois
+function getEcheancesDebits(from, to) {
+  const out = [];
+  echeanciers.forEach(e => {
+    if (e.actif === false) return;
+    const [y, m, j] = String(e.date_premiere_echeance).slice(0, 10).split('-').map(Number);
+    if (!y) return;
+    for (let i = 0; i < e.nb_echeances; i++) {
+      const d = clampDate(y, m - 1 + i, j);
+      if (d >= from && d <= to) out.push({ nom: `${e.nom} (${i + 1}/${e.nb_echeances})`, date: d, montant: Math.round(e.montant_total / e.nb_echeances * 100) / 100, compte: e.compte_id });
+    }
+  });
+  return out;
+}
+
 function getUpcomingForCompte(compteId) {
   const today = new Date();
   const todayDay = today.getDate();
@@ -1641,6 +1656,9 @@ function getUpcomingForCompte(compteId) {
     const diffAmex = 5 - todayDay;
     if (amex > 0 && diffAmex >= 0 && diffAmex <= horizon) upcoming.push({ nom: '💳 Amex', montant: amex, diff: diffAmex });
   }
+  const t0 = new Date(today.getFullYear(), today.getMonth(), todayDay);
+  getEcheancesDebits(t0, new Date(t0.getTime() + horizon * 86400000)).filter(x => x.compte === compteId)
+    .forEach(x => upcoming.push({ nom: x.nom, montant: x.montant, diff: Math.round((x.date - t0) / 86400000) }));
   upcoming.sort((a,b) => a.diff - b.diff);
   return upcoming;
 }
@@ -1873,6 +1891,7 @@ function renderCycle() {
     const d = clamp(base.getFullYear(), base.getMonth(), 5);
     if (d >= start && d <= end) items.push({ nom: '💳 Amex', date: d, montant: t, compte: 'sg-1013', note: t === 0 ? 'aucune dépense Amex saisie' : (estime ? 'estimée d\'après le mois précédent' : '') });
   }
+  getEcheancesDebits(start, end).forEach(x => items.push(x));
   items.sort((a, b) => a.date - b.date || a.nom.localeCompare(b.nom));
 
   if (items.length === 0) {
@@ -1982,6 +2001,7 @@ function renderProchainsPrelevements() {
   });
   const amexMois = amexTotalFor(monthKeyOf(today));
   if (amexMois > 0 && todayDay <= 5) restants.push({ nom: '💳 Amex', montant: amexMois, jour: 5 });
+  getEcheancesDebits(todayMidnight, new Date(todayYear, todayMonth, lastDayOfMonth)).forEach(x => restants.push({ nom: x.nom, montant: x.montant, jour: x.date.getDate() }));
   const totalRestant = restants.reduce((s, p) => s + (p.montant || 0), 0);
 
   // --- URSSAF & TVA : prochaine échéance depuis les déclarations ---
