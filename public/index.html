@@ -2073,17 +2073,19 @@ function renderProchainsPrelevements() {
   const tvaDiff = diffDays(tvaDate);
 
   // Ligne prélèvements restants
-  const prelHTML = `
+  const groupeDe = x => { const c = comptes.find(k => k.id === x.compte); return c ? c.groupe : 'perso'; };
+  const blocPrel = (emoji, titre, liste) => liste.length === 0 ? '' : `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-        <span style="font-size:20px;flex-shrink:0">📋</span>
+        <span style="font-size:20px;flex-shrink:0">${emoji}</span>
         <div>
-          <div style="font-weight:600;font-size:14px">${restants.length} prélèvement${restants.length > 1 ? 's' : ''} restant${restants.length > 1 ? 's' : ''} d'ici le ${fmtFin}</div>
-          <div style="font-size:12px;color:var(--fg2)">${restants.map(p => escHtml(p.nom)).join(' · ')}</div>
+          <div style="font-weight:600;font-size:14px">${titre} <span style="font-weight:400;color:var(--fg2)">${liste.length} prélèvement${liste.length > 1 ? 's' : ''} d'ici le ${fmtFin}</span></div>
+          <div style="font-size:12px;color:var(--fg2)">${liste.map(p => escHtml(p.nom)).join(' · ')}</div>
         </div>
       </div>
-      <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;flex-shrink:0;color:var(--orange)">${fmtEur(totalRestant)}</div>
+      <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;flex-shrink:0;color:var(--orange)">${fmtEur(liste.reduce((t, p) => t + (p.montant || 0), 0))}</div>
     </div>`;
+  const prelHTML = blocPrel('🏠', 'Perso', restants.filter(x => groupeDe(x) !== 'pro')) + blocPrel('💼', 'Pro', restants.filter(x => groupeDe(x) === 'pro'));
 
   // Ligne URSSAF
   const urssafHTML = urssafDate ? `
