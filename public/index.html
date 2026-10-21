@@ -1886,10 +1886,14 @@ function renderCycle() {
   for (let k = 0; k <= 2; k++) {
     const base = new Date(start.getFullYear(), start.getMonth() + k, 1);
     let t = amexTotalFor(monthKeyOf(base));
-    let estime = false;
-    if (t === 0) { t = amexTotalFor(monthKeyOf(new Date(base.getFullYear(), base.getMonth() - 1, 1))); estime = t > 0; }
+    let estime = false, moisPrec = '';
+    if (t === 0) {
+      const prec = new Date(base.getFullYear(), base.getMonth() - 1, 1);
+      t = amexTotalFor(monthKeyOf(prec)); estime = t > 0;
+      moisPrec = prec.toLocaleDateString('fr-FR', { month: 'long' });
+    }
     const d = clamp(base.getFullYear(), base.getMonth(), 5);
-    if (d >= start && d <= end) items.push({ nom: '💳 Amex', date: d, montant: t, compte: 'sg-1013', note: t === 0 ? 'aucune dépense Amex saisie' : (estime ? 'estimée d\'après le mois précédent' : '') });
+    if (d >= start && d <= end) items.push({ nom: '💳 Amex', date: d, montant: t, compte: 'sg-1013', note: t === 0 ? 'aucune dépense Amex saisie' : (estime ? 'dépenses Amex saisies en ' + moisPrec : '') });
   }
   getEcheancesDebits(start, end).forEach(x => items.push(x));
   items.sort((a, b) => a.date - b.date || a.nom.localeCompare(b.nom));
