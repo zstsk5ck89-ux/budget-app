@@ -480,6 +480,8 @@ th.amount { text-align: right; }
 .cycle-compte .cc-nom small { display: block; font-weight: 400; font-size: 11px; color: var(--fg3); }
 .cycle-compte .cc-solde { flex-shrink: 0; text-align: right; font-family: var(--serif); font-variant-numeric: lining-nums tabular-nums; font-weight: 600; font-size: 15px; }
 .cycle-empty { padding: 16px 20px; font-size: 13px; color: var(--fg3); }
+.cycle-paid { display: inline-flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 12px; font-weight: 500; color: var(--fg2); cursor: pointer; }
+.cycle-paid input { width: 16px; height: 16px; accent-color: var(--green); cursor: pointer; }
 .plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; padding: 4px 20px 16px; }
 .plan-card { background: var(--surface2); border-radius: var(--radius-sm); padding: 12px 14px; }
 .plan-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
@@ -1606,6 +1608,11 @@ function getUpcomingForCompte(compteId) {
     if (diff < 0) diff += 30;
     if (diff <= horizon) upcoming.push({ nom: p.nom, montant: p.montant, diff });
   });
+  if (compteId === 'sg-1013') {
+    const amex = amexTotalFor(monthKeyOf(today));
+    const diffAmex = 5 - todayDay;
+    if (amex > 0 && diffAmex >= 0 && diffAmex <= horizon) upcoming.push({ nom: '💳 Amex', montant: amex, diff: diffAmex });
+  }
   upcoming.sort((a,b) => a.diff - b.diff);
   return upcoming;
 }
@@ -1702,14 +1709,44 @@ function getCycleConfig() {
   return { s: 20, e: 14 };
 }
 
+function monthKeyOf(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+// Amex : total des dépenses « Amex » du mois, prélevé le 5 sur le courant **13 (comme dans la checklist)
+function amexTotalFor(key) {
+  return depenses
+    .filter(d => d.categorie === 'amex' && d.date && d.date.startsWith(key))
+    .reduce((t, d) => t + Number(d.montant), 0);
+}
+
+// TVA / URSSAF cochées « payées » : mémorisées dans checklist_coches, pour le mois du prélèvement
+function isFiscalPaye(kind, date) {
+  const c = checkData[monthKeyOf(date)];
+  return !!(c && c['fiscal-' + kind]);
+}
+async function toggleFiscalPaid(kind, key, checked) {
+  if (!checkData[key]) checkData[key] = {};
+  if (checked) checkData[key]['fiscal-' + kind] = true;
+  else delete checkData[key]['fiscal-' + kind];
+  if (sb) {
+    try { await sb.from('checklist_coches').upsert({ mois: key, coches: checkData[key] }); } catch (e) {}
+  }
+  saveLocal();
+  renderAll();
+}
+function fiscalPaidLabel(kind, date) {
+  return `<label class="cycle-paid"><input type="checkbox" ${isFiscalPaye(kind, date) ? 'checked' : ''} onchange="toggleFiscalPaid('${kind}','${monthKeyOf(date)}',this.checked)"> Payée</label>`;
+}
+
 // Prélèvements fiscaux (TVA, URSSAF) issus de la dernière déclaration, sur le compte 63
 function getFiscalDebits() {
   const out = [];
   const d = declarations.length > 0 ? declarations[0] : null;
   if (!d || !d.periode) return out;
   const [y, m] = d.periode.split('-').map(Number);
-  out.push({ nom: 'TVA', date: new Date(y, m, 24), montant: d.tva || 0, compte: 'bb-63' });
-  out.push({ nom: 'URSSAF', date: new Date(y, m + 1, 3), montant: d.urssaf || 0, compte: 'bb-63' });
+  out.push({ nom: 'TVA', kind: 'tva', date: new Date(y, m, 24), montant: d.tva || 0, compte: 'bb-63' });
+  out.push({ nom: 'URSSAF', kind: 'urssaf', date: new Date(y, m + 1, 3), montant: d.urssaf || 0, compte: 'bb-63' });
   return out;
 }
 
@@ -1757,7 +1794,13 @@ function renderCycle() {
       if (d >= start && d <= end) items.push({ nom: p.nom, date: d, montant: p.montant || 0, compte: p.compte });
     }
   });
-  getFiscalDebits().forEach(f => { if (f.date >= start && f.date <= end) items.push(f); });
+  getFiscalDebits().forEach(f => { if (f.date >= start && f.date <= end) items.push({ ...f, paye: isFiscalPaye(f.kind, f.date) }); });
+  for (let k = 0; k <= 2; k++) {
+    const base = new Date(start.getFullYear(), start.getMonth() + k, 1);
+    const t = amexTotalFor(monthKeyOf(base));
+    const d = clamp(base.getFullYear(), base.getMonth(), 5);
+    if (t > 0 && d >= start && d <= end) items.push({ nom: '💳 Amex', date: d, montant: t, compte: 'sg-1013' });
+  }
   items.sort((a, b) => a.date - b.date || a.nom.localeCompare(b.nom));
 
   if (items.length === 0) {
@@ -1766,19 +1809,19 @@ function renderCycle() {
   }
 
   const nomCompte = id => { const c = comptes.find(x => x.id === id); return c ? c.nom : ''; };
-  const deja = items.filter(i => i.date < today).reduce((t, i) => t + i.montant, 0);
-  const reste = items.filter(i => i.date >= today).reduce((t, i) => t + i.montant, 0);
+  const dejaFait = i => i.date < today || i.paye;
+  const deja = items.filter(dejaFait).reduce((t, i) => t + i.montant, 0);
+  const reste = items.filter(i => !dejaFait(i)).reduce((t, i) => t + i.montant, 0);
 
   const rows = items.map(i => `
-    <div class="cycle-row${i.date < today ? ' past' : ''}">
+    <div class="cycle-row${dejaFait(i) ? ' past' : ''}">
       <div class="cycle-date">${fmtD(i.date)}<small>${fmtDay(i.date)}</small></div>
-      <div class="cycle-name">${escHtml(i.nom)}<small>${escHtml(nomCompte(i.compte))}</small></div>
+      <div class="cycle-name">${escHtml(i.nom)}<small>${escHtml(nomCompte(i.compte))}</small>${i.kind ? fiscalPaidLabel(i.kind, i.date) : ''}</div>
       <div class="cycle-amount">${fmtEur(i.montant)}</div>
     </div>`).join('');
 
   // Entrées attendues : clients pas encore cochés dans « Revenus clients » (virements sur le compte Pro)
   const COMPTE_ENTREES = 'bb-68';
-  const monthKey = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
   // Date de virement d'un client : Xylem paie le vendredi de la semaine (lundi au dimanche) du 11 du mois ;
   // pour les autres, le jour indiqué sur la fiche client.
   const datePaiement = (c, y, m) => {
@@ -1793,7 +1836,7 @@ function renderCycle() {
   clients.forEach(c => {
     for (let k = 0; k <= 2; k++) {
       const d = datePaiement(c, start.getFullYear(), start.getMonth() + k);
-      if (d >= start && d <= end && !(revData[monthKey(d)] && revData[monthKey(d)][c.id])) {
+      if (d >= start && d <= end && !(revData[monthKeyOf(d)] && revData[monthKeyOf(d)][c.id])) {
         entrees.push({ nom: c.nom, date: d, montant: (Number(c.ht) || 0) * (1 + (Number(c.tva) || 0) / 100) });
       }
     }
@@ -1807,7 +1850,7 @@ function renderCycle() {
     return d1.getTime() === d2.getTime() ? `le ${fmtD(d1)}` : `du ${fmtD(d1)} au ${fmtD(d2)}`;
   };
   const planHTML = comptes.map(c => {
-    const apr = items.filter(i => i.compte === c.id && i.date >= today);
+    const apr = items.filter(i => i.compte === c.id && !dejaFait(i));
     const ent = c.id === COMPTE_ENTREES ? entrees : [];
     if (apr.length === 0 && ent.length === 0) return '';
     const solde = Number(c.solde) || 0;
@@ -1861,6 +1904,8 @@ function renderProchainsPrelevements() {
     if (p.suspendu) return false;
     return p.jour >= todayDay;
   });
+  const amexMois = amexTotalFor(monthKeyOf(today));
+  if (amexMois > 0 && todayDay <= 5) restants.push({ nom: '💳 Amex', montant: amexMois, jour: 5 });
   const totalRestant = restants.reduce((s, p) => s + (p.montant || 0), 0);
 
   // --- URSSAF & TVA : prochaine échéance depuis les déclarations ---
@@ -1893,8 +1938,8 @@ function renderProchainsPrelevements() {
   const apresFiscal = {};
   let soldeCourant = soldeFiscal;
   [
-    tvaDate ? { k: 'tva', d: tvaDate, m: tvaMontant || 0 } : null,
-    urssafDate ? { k: 'urssaf', d: urssafDate, m: urssafMontant || 0 } : null,
+    tvaDate && !isFiscalPaye('tva', tvaDate) ? { k: 'tva', d: tvaDate, m: tvaMontant || 0 } : null,
+    urssafDate && !isFiscalPaye('urssaf', urssafDate) ? { k: 'urssaf', d: urssafDate, m: urssafMontant || 0 } : null,
   ].filter(Boolean).sort((a, b) => a.d - b.d).forEach(e => {
     soldeCourant -= e.m;
     apresFiscal[e.k] = soldeCourant;
@@ -1930,7 +1975,10 @@ function renderProchainsPrelevements() {
         <div>
           <div style="font-weight:600;font-size:14px">URSSAF <span style="font-weight:400;color:var(--fg2)">prélevé le ${fmtDateShort(urssafDate)}</span></div>
           <div style="font-size:12px;color:var(--fg2)">Épargne **63 · solde actuel <strong style="color:var(--fg)">${fmtEur(soldeFiscal)}</strong>${urssafDiff !== null && urssafDiff >= 0 ? ` · dans ${urssafDiff} j` : ''}</div>
-          <div style="font-size:12px;color:var(--fg2)">Solde prévisionnel après URSSAF <strong style="color:${couleurSolde(apresFiscal.urssaf)}">${fmtEur(apresFiscal.urssaf)}</strong></div>
+          ${isFiscalPaye('urssaf', urssafDate)
+            ? `<div style="font-size:12px;color:var(--green);font-weight:600">Payée, déjà déduite du solde</div>`
+            : `<div style="font-size:12px;color:var(--fg2)">Solde prévisionnel après URSSAF <strong style="color:${couleurSolde(apresFiscal.urssaf)}">${fmtEur(apresFiscal.urssaf)}</strong></div>`}
+          ${fiscalPaidLabel('urssaf', urssafDate)}
         </div>
       </div>
       <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;flex-shrink:0;color:var(--provision)">${fmtEur(urssafMontant)}</div>
@@ -1944,7 +1992,10 @@ function renderProchainsPrelevements() {
         <div>
           <div style="font-weight:600;font-size:14px">TVA <span style="font-weight:400;color:var(--fg2)">prélevée le ${fmtDateShort(tvaDate)}</span></div>
           <div style="font-size:12px;color:var(--fg2)">Épargne **63 · solde actuel <strong style="color:var(--fg)">${fmtEur(soldeFiscal)}</strong>${tvaDiff !== null && tvaDiff >= 0 ? ` · dans ${tvaDiff} j` : ''}</div>
-          <div style="font-size:12px;color:var(--fg2)">Solde prévisionnel après TVA <strong style="color:${couleurSolde(apresFiscal.tva)}">${fmtEur(apresFiscal.tva)}</strong></div>
+          ${isFiscalPaye('tva', tvaDate)
+            ? `<div style="font-size:12px;color:var(--green);font-weight:600">Payée, déjà déduite du solde</div>`
+            : `<div style="font-size:12px;color:var(--fg2)">Solde prévisionnel après TVA <strong style="color:${couleurSolde(apresFiscal.tva)}">${fmtEur(apresFiscal.tva)}</strong></div>`}
+          ${fiscalPaidLabel('tva', tvaDate)}
         </div>
       </div>
       <div style="font-family:var(--serif);font-variant-numeric:lining-nums tabular-nums;font-size:17px;font-weight:600;flex-shrink:0;color:var(--provision)">${fmtEur(tvaMontant)}</div>
