@@ -452,6 +452,35 @@ th.amount { text-align: right; }
 }
 .alert-close:hover { color: var(--fg); background: var(--border); }
 
+/* ---- CYCLE DE PRÉLÈVEMENTS ---- */
+.cycle-config {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 12px 20px; font-size: 13px; color: var(--fg2);
+  border-bottom: 1px solid var(--border);
+}
+.cycle-config .form-select { width: auto; min-width: 64px; padding: 6px 10px; font-size: 13px; }
+.cycle-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 20px; border-bottom: 1px solid var(--border);
+}
+.cycle-row.past { opacity: 0.45; }
+.cycle-date { flex: 0 0 64px; font-size: 12px; font-weight: 600; color: var(--fg2); line-height: 1.3; }
+.cycle-date small { display: block; font-weight: 400; color: var(--fg3); font-size: 11px; }
+.cycle-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; }
+.cycle-name small { display: block; font-weight: 400; font-size: 11px; color: var(--fg3); }
+.cycle-amount { flex-shrink: 0; font-family: var(--serif); font-variant-numeric: lining-nums tabular-nums; font-size: 16px; font-weight: 600; color: var(--orange); }
+.cycle-totals { display: flex; gap: 12px; padding: 14px 20px; flex-wrap: wrap; }
+.cycle-total { flex: 1; min-width: 130px; background: var(--surface2); border-radius: var(--radius-sm); padding: 10px 14px; }
+.cycle-total span { display: block; font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+.cycle-total strong { font-family: var(--serif); font-variant-numeric: lining-nums tabular-nums; font-size: 20px; font-weight: 600; }
+.cycle-sub { padding: 12px 20px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; color: var(--fg3); }
+.cycle-compte { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.cycle-compte:last-child { border-bottom: 0; }
+.cycle-compte .cc-nom { flex: 1; min-width: 0; font-weight: 500; }
+.cycle-compte .cc-nom small { display: block; font-weight: 400; font-size: 11px; color: var(--fg3); }
+.cycle-compte .cc-solde { flex-shrink: 0; text-align: right; font-family: var(--serif); font-variant-numeric: lining-nums tabular-nums; font-weight: 600; font-size: 15px; }
+.cycle-empty { padding: 16px 20px; font-size: 13px; color: var(--fg3); }
+
 /* ---- SIMULATION ---- */
 .sim-flux {
   display: flex;
@@ -802,6 +831,19 @@ th.amount { text-align: right; }
           <div id="prochains-body">
             <div class="loading"><div class="spinner"></div> Chargement…</div>
           </div>
+        </div>
+
+        <!-- CYCLE : PRÉLÈVEMENTS DU 20 AU 14 -->
+        <div class="card">
+          <div class="card-header">
+            <h3 id="cycle-title">Prélèvements du cycle</h3>
+          </div>
+          <div class="cycle-config">
+            Du <select class="form-select" id="cycle-start" aria-label="Jour de début"></select>
+            au <select class="form-select" id="cycle-end" aria-label="Jour de fin"></select>
+            du mois suivant
+          </div>
+          <div id="cycle-body"></div>
         </div>
 
         <!-- MISE A JOUR RAPIDE -->
@@ -1352,7 +1394,7 @@ function unlockApp() {
 // INIT APP
 // ============================================================
 async function initApp() {
-  initNav(); initCalcFiscal(); initSimulation(); initChecklist(); initRevenus(); initDepenses();
+  initNav(); initCalcFiscal(); initSimulation(); initChecklist(); initRevenus(); initDepenses(); initCycleControls();
   try {
     const { createClient } = supabase;
     sb = createClient(SUPABASE_URL, ANON_KEY);
@@ -1510,6 +1552,7 @@ function renderAll() {
   renderDashboardComptes();
   renderSoldesForm();
   renderProchainsPrelevements();
+  renderCycle();
   computeAlerts();
   renderComptes();
   renderDeclarations();
@@ -1636,6 +1679,118 @@ document.getElementById('refreshBtn').addEventListener('click', () => {
   if (!sb) { loadFromLocal(); renderAll(); }
   showToast('Actualisation…');
 });
+
+// ============================================================
+// CYCLE DE PRÉLÈVEMENTS (ex. du 20 au 14 du mois suivant)
+// ============================================================
+function getCycleConfig() {
+  try {
+    const c = JSON.parse(tryGet('budget_cycle') || 'null');
+    if (c && c.s >= 1 && c.s <= 31 && c.e >= 1 && c.e <= 31) return c;
+  } catch (e) {}
+  return { s: 20, e: 14 };
+}
+
+// Prélèvements fiscaux (TVA, URSSAF) issus de la dernière déclaration, sur le compte 63
+function getFiscalDebits() {
+  const out = [];
+  const d = declarations.length > 0 ? declarations[0] : null;
+  if (!d || !d.periode) return out;
+  const [y, m] = d.periode.split('-').map(Number);
+  out.push({ nom: 'TVA', date: new Date(y, m, 24), montant: d.tva || 0, compte: 'bb-63' });
+  out.push({ nom: 'URSSAF', date: new Date(y, m + 1, 3), montant: d.urssaf || 0, compte: 'bb-63' });
+  return out;
+}
+
+function initCycleControls() {
+  const cfg = getCycleConfig();
+  const opts = Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('');
+  const sel = { s: document.getElementById('cycle-start'), e: document.getElementById('cycle-end') };
+  sel.s.innerHTML = opts; sel.e.innerHTML = opts;
+  sel.s.value = cfg.s; sel.e.value = cfg.e;
+  const onChange = () => {
+    trySet('budget_cycle', JSON.stringify({ s: Number(sel.s.value), e: Number(sel.e.value) }));
+    renderCycle();
+  };
+  sel.s.addEventListener('change', onChange);
+  sel.e.addEventListener('change', onChange);
+}
+
+function renderCycle() {
+  const body = document.getElementById('cycle-body');
+  if (!body) return;
+  const { s, e } = getCycleConfig();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  // Cycle en cours : du jour s au jour e du mois suivant.
+  // Entre la fin (e) et le début (s) du cycle suivant, on affiche le prochain cycle.
+  const clamp = (y, m, day) => new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));
+  let start;
+  if (today.getDate() >= s) start = clamp(today.getFullYear(), today.getMonth(), s);
+  else if (today.getDate() <= e) start = clamp(today.getFullYear(), today.getMonth() - 1, s);
+  else start = clamp(today.getFullYear(), today.getMonth(), s);
+  const end = clamp(start.getFullYear(), start.getMonth() + 1, e);
+  const prochain = today < start;
+
+  const fmtD = d => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }).replace('.', '');
+  const fmtDay = d => d.toLocaleDateString('fr-FR', { weekday: 'short' }).replace('.', '');
+  document.getElementById('cycle-title').textContent = `Prélèvements du ${fmtD(start)} au ${fmtD(end)}${prochain ? ' (prochain cycle)' : ''}`;
+
+  // Liste des prélèvements dans la fenêtre
+  const items = [];
+  prelevements.forEach(p => {
+    if (p.suspendu) return;
+    for (let k = 0; k <= 2; k++) {
+      const d = clamp(start.getFullYear(), start.getMonth() + k, p.jour);
+      if (d >= start && d <= end) items.push({ nom: p.nom, date: d, montant: p.montant || 0, compte: p.compte });
+    }
+  });
+  getFiscalDebits().forEach(f => { if (f.date >= start && f.date <= end) items.push(f); });
+  items.sort((a, b) => a.date - b.date || a.nom.localeCompare(b.nom));
+
+  if (items.length === 0) {
+    body.innerHTML = '<div class="cycle-empty">Aucun prélèvement sur cette période.</div>';
+    return;
+  }
+
+  const nomCompte = id => { const c = comptes.find(x => x.id === id); return c ? c.nom : ''; };
+  const deja = items.filter(i => i.date < today).reduce((t, i) => t + i.montant, 0);
+  const reste = items.filter(i => i.date >= today).reduce((t, i) => t + i.montant, 0);
+
+  const rows = items.map(i => `
+    <div class="cycle-row${i.date < today ? ' past' : ''}">
+      <div class="cycle-date">${fmtD(i.date)}<small>${fmtDay(i.date)}</small></div>
+      <div class="cycle-name">${escHtml(i.nom)}<small>${escHtml(nomCompte(i.compte))}</small></div>
+      <div class="cycle-amount">${fmtEur(i.montant)}</div>
+    </div>`).join('');
+
+  // Par compte : ce qu'il reste à prélever et le solde prévisionnel (sans les entrées)
+  const parCompte = {};
+  items.forEach(i => {
+    if (i.date < today) return;
+    parCompte[i.compte] = (parCompte[i.compte] || 0) + i.montant;
+  });
+  const comptesHTML = Object.keys(parCompte).map(id => {
+    const c = comptes.find(x => x.id === id);
+    if (!c) return '';
+    const solde = Number(c.solde) || 0;
+    const prev = solde - parCompte[id];
+    return `
+    <div class="cycle-compte">
+      <div class="cc-nom">${escHtml(c.nom)}<small>solde ${fmtEur(solde)} · à prélever ${fmtEur(parCompte[id])}</small></div>
+      <div class="cc-solde" style="color:${prev >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtEur(prev)}</div>
+    </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="cycle-totals">
+      <div class="cycle-total"><span>Déjà prélevé</span><strong>${fmtEur(deja)}</strong></div>
+      <div class="cycle-total"><span>Reste à prélever</span><strong style="color:var(--orange)">${fmtEur(reste)}</strong></div>
+    </div>
+    ${rows}
+    ${comptesHTML ? `<div class="cycle-sub">Solde prévisionnel par compte, avant les entrées</div>${comptesHTML}` : ''}`;
+}
 
 // ============================================================
 // PROCHAINS PRÉLÈVEMENTS
