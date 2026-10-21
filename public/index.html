@@ -1321,7 +1321,7 @@ const TAUX_URSSAF = 0.256; // 23.2% + 2.2% VFL + 0.2% CFP
 const COMPTES_DEFAULT = [
   { id: 'sg-1013', nom: 'Courant principal **13', banque: 'Société Générale', type: 'courant', solde: 300, objectif_min: 300, couleur: '#2563EB', groupe: 'perso' },
   { id: 'sg-4036', nom: 'Charges auto **36', banque: 'Société Générale', type: 'courant', solde: 0, objectif_min: 0, couleur: '#2563EB', groupe: 'perso' },
-  { id: 'sg-9035', nom: 'Épargne buffer **35', banque: 'Société Générale', type: 'epargne', solde: 0, objectif_min: 500, couleur: '#16A34A', groupe: 'perso' },
+  { id: 'sg-9035', nom: 'Épargne', banque: 'Société Générale', type: 'epargne', solde: 0, objectif_min: 500, couleur: '#16A34A', groupe: 'perso' },
   { id: 'sg-5526', nom: 'LDD vacances **26', banque: 'Société Générale', type: 'ldd', solde: 0, objectif_min: 0, couleur: '#16A34A', groupe: 'perso' },
   { id: 'bb-68', nom: 'Courant **68', banque: 'Boursobank', type: 'pro', solde: 300, objectif_min: 300, couleur: '#EA580C', groupe: 'pro' },
   { id: 'bb-63', nom: 'Épargne TVA URSSAF **63', banque: 'Boursobank', type: 'provision', solde: 0, objectif_min: 1000, couleur: '#7C3AED', groupe: 'pro' },
@@ -1342,7 +1342,7 @@ const PRELEVEMENTS_DEFAULT = [
   { id: 'p-spotify', jour: 16, nom: 'Spotify', montant: 11, compte: 'sg-1013', cat: 'abonnement', paypal: false, groupe: 'perso' },
   { id: 'p-ociane', jour: 16, nom: 'Ociane Mutuelle', montant: 75, compte: 'sg-1013', cat: 'sante', paypal: false, groupe: 'perso' },
   { id: 'p-apple', jour: 30, nom: 'Apple / PayPal', montant: 9.99, compte: 'sg-1013', cat: 'abonnement', paypal: true, groupe: 'perso' },
-  { id: 'p-edf', jour: 30, nom: 'EDF / Gaz / Charges', montant: 160, compte: 'sg-9035', cat: 'energie', paypal: false, groupe: 'perso' },
+  { id: 'p-edf', jour: 30, nom: 'EDF / Gaz / Charges', montant: 160, compte: 'sg-1013', cat: 'energie', paypal: false, groupe: 'perso' },
   // PRO
   { id: 'p-wemind', jour: 8, nom: 'Wemind Assurance PRO', montant: 80, compte: 'bb-68', cat: 'assurance', paypal: false, groupe: 'pro' },
   { id: 'p-orange', jour: 9, nom: 'Orange Pro', montant: 20, compte: 'bb-68', cat: 'telecom', paypal: false, groupe: 'pro' },
@@ -1408,6 +1408,28 @@ function unlockApp() {
 }
 
 // ============================================================
+// CORRECTIONS DE DONNÉES (appliquées aussi aux lignes déjà enregistrées en base)
+// ============================================================
+const CORRECTIONS_COMPTES = { 'sg-9035': { nom: 'Épargne' } };
+const CORRECTIONS_PRELEVEMENTS = { 'p-edf': { compte: 'sg-1013' } };
+
+async function appliquerCorrections() {
+  const passes = [
+    ['comptes', comptes, CORRECTIONS_COMPTES],
+    ['prelevements', prelevements, CORRECTIONS_PRELEVEMENTS],
+  ];
+  for (const [table, liste, corrections] of passes) {
+    for (const ligne of liste) {
+      const fix = corrections[ligne.id];
+      if (!fix || !Object.keys(fix).some(k => ligne[k] !== fix[k])) continue;
+      Object.assign(ligne, fix);
+      if (sb) { try { await sb.from(table).update(fix).eq('id', ligne.id); } catch (e) {} }
+    }
+  }
+  saveLocal();
+}
+
+// ============================================================
 // INIT APP
 // ============================================================
 async function initApp() {
@@ -1417,6 +1439,7 @@ async function initApp() {
     sb = createClient(SUPABASE_URL, ANON_KEY);
   } catch(e) { sb = null; }
   if (sb) { await loadFromDB(); } else { loadFromLocal(); }
+  await appliquerCorrections();
   renderAll(); setupListeners();
 }
 
@@ -1830,7 +1853,7 @@ function renderCycle() {
 
   const fmtD = d => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }).replace('.', '');
   const fmtDay = d => d.toLocaleDateString('fr-FR', { weekday: 'short' }).replace('.', '');
-  document.getElementById('cycle-title').textContent = `Prélèvements du ${fmtD(start)} au ${fmtD(end)}${prochain ? ' (prochain cycle)' : ''}`;
+  document.getElementById('cycle-title').textContent = `Prélèvements et entrées du ${fmtD(start)} au ${fmtD(end)}${prochain ? ' (prochain cycle)' : ''}`;
 
   // Liste des prélèvements dans la fenêtre
   const items = [];
@@ -1844,9 +1867,11 @@ function renderCycle() {
   getFiscalDebits().forEach(f => { if (f.date >= start && f.date <= end) items.push({ ...f, paye: isFiscalPaye(f.kind, f.date) }); });
   for (let k = 0; k <= 2; k++) {
     const base = new Date(start.getFullYear(), start.getMonth() + k, 1);
-    const t = amexTotalFor(monthKeyOf(base));
+    let t = amexTotalFor(monthKeyOf(base));
+    let estime = false;
+    if (t === 0) { t = amexTotalFor(monthKeyOf(new Date(base.getFullYear(), base.getMonth() - 1, 1))); estime = t > 0; }
     const d = clamp(base.getFullYear(), base.getMonth(), 5);
-    if (t > 0 && d >= start && d <= end) items.push({ nom: '💳 Amex', date: d, montant: t, compte: 'sg-1013' });
+    if (d >= start && d <= end) items.push({ nom: '💳 Amex', date: d, montant: t, compte: 'sg-1013', note: t === 0 ? 'aucune dépense Amex saisie' : (estime ? 'estimée d\'après le mois précédent' : '') });
   }
   items.sort((a, b) => a.date - b.date || a.nom.localeCompare(b.nom));
 
@@ -1859,13 +1884,6 @@ function renderCycle() {
   const dejaFait = i => i.date < today || i.paye;
   const deja = items.filter(dejaFait).reduce((t, i) => t + i.montant, 0);
   const reste = items.filter(i => !dejaFait(i)).reduce((t, i) => t + i.montant, 0);
-
-  const rows = items.map(i => `
-    <div class="cycle-row${dejaFait(i) ? ' past' : ''}">
-      <div class="cycle-date">${fmtD(i.date)}<small>${fmtDay(i.date)}</small></div>
-      <div class="cycle-name">${escHtml(i.nom)}<small>${escHtml(nomCompte(i.compte))}</small>${i.kind ? fiscalPaidLabel(i.kind, i.date) : ''}</div>
-      <div class="cycle-amount">${fmtEur(i.montant)}</div>
-    </div>`).join('');
 
   // Entrées attendues : clients pas encore cochés dans « Revenus clients » (virements sur le compte Pro)
   const COMPTE_ENTREES = 'bb-68';
@@ -1880,6 +1898,24 @@ function renderCycle() {
     }
   });
   entrees.sort((a, b) => a.date - b.date);
+  const totalEntrees = entrees.reduce((t, e) => t + e.montant, 0);
+
+  // Liste chronologique : prélèvements et entrées estimées mélangés (l'entrée passe avant le prélèvement du même jour)
+  const lignesCycle = [
+    ...items.map(i => ({ date: i.date, ordre: 1, html: `
+    <div class="cycle-row${dejaFait(i) ? ' past' : ''}">
+      <div class="cycle-date">${fmtD(i.date)}<small>${fmtDay(i.date)}</small></div>
+      <div class="cycle-name">${escHtml(i.nom)}<small>${escHtml(nomCompte(i.compte))}${i.note ? ', ' + escHtml(i.note) : ''}</small>${i.kind ? fiscalPaidLabel(i.kind, i.date) : ''}</div>
+      <div class="cycle-amount">${fmtEur(i.montant)}</div>
+    </div>` })),
+    ...entrees.map(e => ({ date: e.date, ordre: 0, html: `
+    <div class="cycle-row">
+      <div class="cycle-date">${fmtD(e.date)}<small>${fmtDay(e.date)}</small></div>
+      <div class="cycle-name">${escHtml(e.nom)}<small>Entrée estimée, ${escHtml(nomCompte(COMPTE_ENTREES))}</small></div>
+      <div class="cycle-amount" style="color:var(--green)">+ ${fmtEur(e.montant)}</div>
+    </div>` })),
+  ].sort((a, b) => a.date - b.date || a.ordre - b.ordre);
+  const rows = lignesCycle.map(l => l.html).join('');
 
   // Plan par compte
   const periodeTxt = list => {
@@ -1921,9 +1957,10 @@ function renderCycle() {
     <div class="cycle-totals">
       <div class="cycle-total"><span>Déjà prélevé</span><strong>${fmtEur(deja)}</strong></div>
       <div class="cycle-total"><span>Reste à prélever</span><strong style="color:var(--orange)">${fmtEur(reste)}</strong></div>
+      <div class="cycle-total"><span>Entrées estimées</span><strong style="color:var(--green)">+ ${fmtEur(totalEntrees)}</strong></div>
     </div>
     ${planHTML ? `<div class="cycle-sub">Plan par compte</div><div class="plan-grid">${planHTML}</div>` : ''}
-    <div class="cycle-sub">Détail des prélèvements</div>
+    <div class="cycle-sub">Détail des prélèvements et des entrées</div>
     ${rows}`;
 }
 
