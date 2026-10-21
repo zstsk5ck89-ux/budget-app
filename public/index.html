@@ -480,6 +480,17 @@ th.amount { text-align: right; }
 .cycle-compte .cc-nom small { display: block; font-weight: 400; font-size: 11px; color: var(--fg3); }
 .cycle-compte .cc-solde { flex-shrink: 0; text-align: right; font-family: var(--serif); font-variant-numeric: lining-nums tabular-nums; font-weight: 600; font-size: 15px; }
 .cycle-empty { padding: 16px 20px; font-size: 13px; color: var(--fg3); }
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; padding: 4px 20px 16px; }
+.plan-card { background: var(--surface2); border-radius: var(--radius-sm); padding: 12px 14px; }
+.plan-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.plan-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 5px 0; font-size: 13px; color: var(--fg2); }
+.plan-row span { min-width: 0; }
+.plan-row small { display: block; font-size: 11px; color: var(--fg3); margin-top: 1px; }
+.plan-row strong { flex-shrink: 0; font-family: var(--serif); font-variant-numeric: lining-nums tabular-nums; font-size: 15px; font-weight: 600; color: var(--fg); }
+.plan-result { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+.plan-result strong { flex-shrink: 0; font-family: var(--serif); font-variant-numeric: lining-nums tabular-nums; font-size: 16px; }
+.plan-result.ok strong { color: var(--green); }
+.plan-result.ko strong { color: var(--red); }
 
 /* ---- SIMULATION ---- */
 .sim-flux {
@@ -1765,22 +1776,54 @@ function renderCycle() {
       <div class="cycle-amount">${fmtEur(i.montant)}</div>
     </div>`).join('');
 
-  // Par compte : ce qu'il reste à prélever et le solde prévisionnel (sans les entrées)
-  const parCompte = {};
-  items.forEach(i => {
-    if (i.date < today) return;
-    parCompte[i.compte] = (parCompte[i.compte] || 0) + i.montant;
+  // Entrées attendues : clients pas encore cochés dans « Revenus clients » (virements sur le compte Pro)
+  const COMPTE_ENTREES = 'bb-68';
+  const monthKey = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  const entrees = [];
+  clients.forEach(c => {
+    for (let k = 0; k <= 2; k++) {
+      const d = clamp(start.getFullYear(), start.getMonth() + k, c.jour);
+      if (d >= start && d <= end && !(revData[monthKey(d)] && revData[monthKey(d)][c.id])) {
+        entrees.push({ nom: c.nom, date: d, montant: (Number(c.ht) || 0) * (1 + (Number(c.tva) || 0) / 100) });
+      }
+    }
   });
-  const comptesHTML = Object.keys(parCompte).map(id => {
-    const c = comptes.find(x => x.id === id);
-    if (!c) return '';
+  entrees.sort((a, b) => a.date - b.date);
+
+  // Plan par compte
+  const periodeTxt = list => {
+    if (list.length === 0) return '';
+    const d1 = list[0].date, d2 = list[list.length - 1].date;
+    return d1.getTime() === d2.getTime() ? `le ${fmtD(d1)}` : `du ${fmtD(d1)} au ${fmtD(d2)}`;
+  };
+  const planHTML = comptes.map(c => {
+    const apr = items.filter(i => i.compte === c.id && i.date >= today);
+    const ent = c.id === COMPTE_ENTREES ? entrees : [];
+    if (apr.length === 0 && ent.length === 0) return '';
     const solde = Number(c.solde) || 0;
-    const prev = solde - parCompte[id];
-    return `
-    <div class="cycle-compte">
-      <div class="cc-nom">${escHtml(c.nom)}<small>solde ${fmtEur(solde)} · à prélever ${fmtEur(parCompte[id])}</small></div>
-      <div class="cc-solde" style="color:${prev >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtEur(prev)}</div>
-    </div>`;
+    const aPrel = apr.reduce((t, i) => t + i.montant, 0);
+    const totEnt = ent.reduce((t, i) => t + i.montant, 0);
+    const prevu = solde + totEnt - aPrel;
+
+    const lignes = [`<div class="plan-row"><span>Solde actuel</span><strong>${fmtEur(solde)}</strong></div>`];
+    if (ent.length > 0) {
+      lignes.push(`<div class="plan-row"><span>Entrées attendues<small>${ent.map(e => escHtml(e.nom) + ' ' + fmtD(e.date)).join(' · ')}</small></span><strong style="color:var(--green)">+ ${fmtEur(totEnt)}</strong></div>`);
+    }
+    if (apr.length > 0) {
+      lignes.push(`<div class="plan-row"><span>Prélèvements à venir<small>${apr.length} ${apr.length > 1 ? 'prélèvements' : 'prélèvement'}, ${periodeTxt(apr)}</small></span><strong style="color:var(--orange)">− ${fmtEur(aPrel)}</strong></div>`);
+    }
+
+    let conclusion;
+    if (ent.length > 0) {
+      conclusion = prevu >= 0
+        ? `<div class="plan-result ok"><span>Solde prévisionnel au ${fmtD(end)}</span><strong>${fmtEur(prevu)}</strong></div>`
+        : `<div class="plan-result ko"><span>À verser pour couvrir</span><strong>${fmtEur(-prevu)}</strong></div>`;
+    } else {
+      conclusion = solde >= aPrel
+        ? `<div class="plan-result ok"><span>Prévoir un solde de ${fmtEur(aPrel)}</span><strong>Couvert</strong></div>`
+        : `<div class="plan-result ko"><span>Prévoir un solde de ${fmtEur(aPrel)}</span><strong>À verser ${fmtEur(aPrel - solde)}</strong></div>`;
+    }
+    return `<div class="plan-card"><div class="plan-title">${escHtml(c.nom)}</div>${lignes.join('')}${conclusion}</div>`;
   }).join('');
 
   body.innerHTML = `
@@ -1788,8 +1831,9 @@ function renderCycle() {
       <div class="cycle-total"><span>Déjà prélevé</span><strong>${fmtEur(deja)}</strong></div>
       <div class="cycle-total"><span>Reste à prélever</span><strong style="color:var(--orange)">${fmtEur(reste)}</strong></div>
     </div>
-    ${rows}
-    ${comptesHTML ? `<div class="cycle-sub">Solde prévisionnel par compte, avant les entrées</div>${comptesHTML}` : ''}`;
+    ${planHTML ? `<div class="cycle-sub">Plan par compte</div><div class="plan-grid">${planHTML}</div>` : ''}
+    <div class="cycle-sub">Détail des prélèvements</div>
+    ${rows}`;
 }
 
 // ============================================================
