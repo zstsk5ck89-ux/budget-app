@@ -1779,10 +1779,20 @@ function renderCycle() {
   // Entrées attendues : clients pas encore cochés dans « Revenus clients » (virements sur le compte Pro)
   const COMPTE_ENTREES = 'bb-68';
   const monthKey = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  // Date de virement d'un client : Xylem paie le vendredi de la semaine (lundi au dimanche) du 11 du mois ;
+  // pour les autres, le jour indiqué sur la fiche client.
+  const datePaiement = (c, y, m) => {
+    if (/^xylem/i.test(c.nom || '')) {
+      const d11 = new Date(y, m, 11);
+      const joursDepuisLundi = (d11.getDay() + 6) % 7;
+      return new Date(y, m, 11 + (4 - joursDepuisLundi));
+    }
+    return clamp(y, m, c.jour);
+  };
   const entrees = [];
   clients.forEach(c => {
     for (let k = 0; k <= 2; k++) {
-      const d = clamp(start.getFullYear(), start.getMonth() + k, c.jour);
+      const d = datePaiement(c, start.getFullYear(), start.getMonth() + k);
       if (d >= start && d <= end && !(revData[monthKey(d)] && revData[monthKey(d)][c.id])) {
         entrees.push({ nom: c.nom, date: d, montant: (Number(c.ht) || 0) * (1 + (Number(c.tva) || 0) / 100) });
       }
