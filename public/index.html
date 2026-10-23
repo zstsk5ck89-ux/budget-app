@@ -1313,7 +1313,8 @@ th.amount { text-align: right; }
 // ============================================================
 // CONSTANTES
 // ============================================================
-const APP_PASSWORD = 'JD2026';
+const PW_SALT = 'a4b8d2b9e5dd7b2c9bf2ee82e3a5e529';
+const PW_HASH = '9830d73e8b4e5d0d14cdd809083f43ebc06865c1ab18961f79c0ab80e26a6683';
 const SUPABASE_URL = 'https://rvhmowdiqzwbpydrhfqb.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2aG1vd2RpcXp3YnB5ZHJoZnFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0ODUzMDgsImV4cCI6MjEwODA2MTMwOH0.cgHY4d_3PtSD__ykiT_C2-2LZUChvX0_GBO9QA0T8_A';
 const TAUX_URSSAF = 0.256; // 23.2% + 2.2% VFL + 0.2% CFP
@@ -1384,16 +1385,26 @@ let unsubs = [];
 // ============================================================
 // PASSWORD
 // ============================================================
-function initPassword() {
-  const stored = tryGet('wd_auth');
-  if (stored === APP_PASSWORD) { unlockApp(); return; }
+async function hashPw(pw) {
+  try {
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+    const salt = new Uint8Array(PW_SALT.match(/../g).map(x => parseInt(x, 16)));
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 300000, hash: 'SHA-256' }, key, 256);
+    return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch(e) { return ''; }
+}
+async function initPassword() {
   document.getElementById('pwBtn').addEventListener('click', checkPw);
   document.getElementById('pwInput').addEventListener('keydown', e => { if(e.key==='Enter') checkPw(); });
+  const stored = tryGet('wd_auth');
+  if (stored && stored === PW_HASH) { unlockApp(); return; }
+  if (stored) trySet('wd_auth', '');
 }
-function checkPw() {
+async function checkPw() {
   const val = document.getElementById('pwInput').value;
-  if (val === APP_PASSWORD) {
-    trySet('wd_auth', val);
+  const h = await hashPw(val);
+  if (h && h === PW_HASH) {
+    trySet('wd_auth', h);
     unlockApp();
   } else {
     document.getElementById('pwError').hidden = false;
